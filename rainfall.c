@@ -17,19 +17,7 @@ double min(double a, double b) {
     return b;
   }
 }
-/*
-int isWet(double** curr, int N) {
-  int i, j;
-  for (i = 0; i < N; i++) {
-    for (j = 0; j < N; j++) {
-      if (curr[i][j] > 0) {
-	return 1;
-      }
-    }
-  }
-  return 0;
-}
-*/
+
 double** doAlloc(int N) {
   int i;
   // allocate N*N matrix and initialize to 0
@@ -69,7 +57,6 @@ int simulate(double** land, double** absorb, struct Frac** fraction, int M, doub
     // temporary matrix for the current time step, to record trickle in the first traverse, then used in the second traverse to update curr matrix
     double** trickle = doAlloc(N);
 
-    //    printf("M=%d\n", M);
     // first traverse
     for (i = 0; i < N; i++) {
       for (j = 0; j < N; j++) {
@@ -85,11 +72,8 @@ int simulate(double** land, double** absorb, struct Frac** fraction, int M, doub
 	}
 	// 3a) populate the temporary trickle matrix, do nothing if there remains no water at this point or this point has no lower neighbors
 	struct Frac* f = &fraction[i][j];
-	//	printf("f.willTrickle = %d, ", f.willTrickle);
-	//	printf("%lf\n", f.up+f.down+f.left+f.right);
-	//	printf("%d", f.willTrickle);
+
 	if (curr[i][j] > 0 && f->willTrickle == 1) {
-	  printf("# ");
 	  double trickleAmt = min(1, curr[i][j]);
 	  trickle[i][j] -= trickleAmt;
 	  if (i-1 >= 0) { // up (i-1,j)
@@ -105,31 +89,21 @@ int simulate(double** land, double** absorb, struct Frac** fraction, int M, doub
 	    trickle[i][j+1] += trickleAmt * f->right;
 	  }
 	}
-	else {
-	  printf("* ");
-	}
       }
-      printf("\n");
     }
-    //    printf("finish first traverse!!\n");
+
     // 3b) second traverse
     for (i = 0; i < N; i++) {
       for (j = 0; j < N; j++) {
 	curr[i][j] += trickle[i][j];
-	printf("%lf ", curr[i][j]);
 	if (curr[i][j] > 0) {
 	  isWet = 1;
 	}
       }
-      printf("\n");
     }
-    printf("\n");
     
     doFree(trickle, N);
     t++;
-    // printf("%d\n", t);
-    // wet = isWet(curr, N);
-    
     if (M > 0) {
       M--;
     }
@@ -159,14 +133,12 @@ void calcFraction(struct Frac** fraction, double** land, int N) {
 	min_elevation = land[i][j+1];
       }
 
-      // to see if (i, j) has any lower neighbor, if there is, then proceed, otherwise do nothing(all struct members initialized to 0, willTrickle=0 meaning no trickle) and continue to the next iteration(go on to inspect next point)
+      // check if (i, j) has any lower neighbor, if there is, then proceed, otherwise do nothing(all struct members already initialized to 0, willTrickle=0 meaning no trickle) and continue to the next iteration(go on to inspect the next point)
       if (min_elevation == land[i][j]) {
-	// printf("* ");
 	continue;
       }
-      
-      // printf("#");
-      // has lower neighbor, will trickle
+      // has lower neighbor, will trickle, so proceed
+
       struct Frac* f = &fraction[i][j];
       f->willTrickle = 1;
       
@@ -199,9 +171,7 @@ void calcFraction(struct Frac** fraction, double** land, int N) {
       if (j+1 < N && land[i][j+1] == min_elevation) { // right (i,j+1) 
 	f->right = each;
       }
-      //   printf("%lf ", f.up+f.down+f.left+f.right);
     }
-    //    printf("\n");
   }
 }
 
@@ -250,20 +220,19 @@ int main(int argc, char** argv){
   for (i = 0; i < N; i++) {
     fraction[i] = calloc(N, sizeof(struct Frac));
   }
-  // printf("1\n");
+
+  // populate the fraction matrix
   calcFraction(fraction, land, N);
   
   // do the simulation
-  //  printf("2\n");
   t = simulate(land, absorb, fraction, M, A, N);
 
-  printf("3\n");
-  // print result according to assignment spec  
+  // print result to stdout according to assignment spec  
   printf("Rainfall simulation took %d time steps to complete.\n", t);
   printf("The following grid shows the number of raindrops absorbed at each point:\n");
   for(i = 0; i < N; i++) {
     for(j = 0; j < N; j++) {
-      printf("%lf ", absorb[i][j]);
+      printf("%g ", absorb[i][j]);
     }
     printf("\n");
   }
