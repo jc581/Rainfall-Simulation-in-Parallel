@@ -84,26 +84,32 @@ int simulate(double** land, double** absorb, struct Frac** fraction, int M, doub
 	  curr[i][j] -= abosorbAmt;
 	}
 	// 3a) populate the temporary trickle matrix, do nothing if there remains no water at this point or this point has no lower neighbors
-	struct Frac f = fraction[i][j];
+	struct Frac* f = &fraction[i][j];
 	//	printf("f.willTrickle = %d, ", f.willTrickle);
 	//	printf("%lf\n", f.up+f.down+f.left+f.right);
-	if (curr[i][j] > 0 && f.willTrickle == 1) {
+	//	printf("%d", f.willTrickle);
+	if (curr[i][j] > 0 && f->willTrickle == 1) {
+	  printf("# ");
 	  double trickleAmt = min(1, curr[i][j]);
 	  trickle[i][j] -= trickleAmt;
 	  if (i-1 >= 0) { // up (i-1,j)
-	    trickle[i-1][j] += trickleAmt * f.up;
+	    trickle[i-1][j] += trickleAmt * f->up;
 	  }
 	  if (i+1 < N) { // down (i+1,j)
-	    trickle[i+1][j] += trickleAmt * f.down;
+	    trickle[i+1][j] += trickleAmt * f->down;
 	  }
 	  if (j-1 >= 0) { // left (i,j-1)
-	    trickle[i][j-1] += trickleAmt * f.left;
+	    trickle[i][j-1] += trickleAmt * f->left;
 	  }
 	  if (j+1 < N) { //right (i,j+1)
-	    trickle[i][j+1] += trickleAmt * f.right;
+	    trickle[i][j+1] += trickleAmt * f->right;
 	  }
 	}
+	else {
+	  printf("* ");
+	}
       }
+      printf("\n");
     }
     //    printf("finish first traverse!!\n");
     // 3b) second traverse
@@ -153,16 +159,19 @@ void calcFraction(struct Frac** fraction, double** land, int N) {
 	min_elevation = land[i][j+1];
       }
 
-      // to see if (i, j) has any lower neighbor, if there is, then proceed, otherwise do nothing(all struct members initialized to 0, willTrickle=0 meaning no trickle)
+      // to see if (i, j) has any lower neighbor, if there is, then proceed, otherwise do nothing(all struct members initialized to 0, willTrickle=0 meaning no trickle) and continue to the next iteration(go on to inspect next point)
       if (min_elevation == land[i][j]) {
-	return;
+	// printf("* ");
+	continue;
       }
+      
+      // printf("#");
       // has lower neighbor, will trickle
-      struct Frac f = fraction[i][j];
-      f.willTrickle = 1;
+      struct Frac* f = &fraction[i][j];
+      f->willTrickle = 1;
       
       // second traversal of neighbors: determine min_cnt of the 4
-      int min_cnt = 0;
+      double min_cnt = 0;
       if (i-1 >= 0 && land[i-1][j] == min_elevation) { // up (i-1,j)
 	min_cnt++;
       }
@@ -179,18 +188,20 @@ void calcFraction(struct Frac** fraction, double** land, int N) {
       // third traversal of neighbors: calulate the fraction of the trickle that each neighbor should receive from (i,j)
       double each = 1 / min_cnt;
       if (i-1 >= 0 && land[i-1][j] == min_elevation) { // up (i-1,j)
-	f.up = each;
+	f->up = each;
       }
       if (i+1 < N && land[i+1][j] == min_elevation) { // down (i+1,j)
-	f.down = each;
+	f->down = each;
       }
       if (j-1 >= 0 && land[i][j-1] == min_elevation) { // left (i,j-1)  
-	f.left = each;
+	f->left = each;
       }
       if (j+1 < N && land[i][j+1] == min_elevation) { // right (i,j+1) 
-	f.right = each;
+	f->right = each;
       }
+      //   printf("%lf ", f.up+f.down+f.left+f.right);
     }
+    //    printf("\n");
   }
 }
 
@@ -225,9 +236,7 @@ int main(int argc, char** argv){
       if (!fscanf(f, "%lf", &land[i][j])) {
 	break;
       }
-      // printf("%lf ", land[i][j]);
     }
-    //  printf("\n");
   }
   
   // close file
