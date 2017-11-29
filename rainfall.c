@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 struct Frac {
   int willTrickle;
@@ -8,6 +9,17 @@ struct Frac {
   double left;
   double right;
 };
+
+double calc_time(struct timespec start, struct timespec end) {
+  double start_sec = (double)start.tv_sec*1000000000.0 + (double)start.tv_nsec;
+  double end_sec = (double)end.tv_sec*1000000000.0 + (double)end.tv_nsec;
+
+  if (end_sec < start_sec) {
+    return 0;
+  } else {
+    return end_sec - start_sec;
+  }
+}
 
 double min(double a, double b) {
   if (a < b) {
@@ -193,6 +205,8 @@ int main(int argc, char** argv){
   // absorb matrix to record the amount of water draining to land
   double** absorb = doAlloc(N);
  
+  struct timespec start_time, end_time;
+
   // open file
   FILE * f = fopen(argv[4], "r");
   if (f == NULL) {
@@ -223,10 +237,16 @@ int main(int argc, char** argv){
 
   // populate the fraction matrix
   calcFraction(fraction, land, N);
-  
+
+  clock_gettime(CLOCK_MONOTONIC, &start_time);
   // do the simulation
   t = simulate(land, absorb, fraction, M, A, N);
+  clock_gettime(CLOCK_MONOTONIC, &end_time);
 
+  double elapsed_ns = calc_time(start_time, end_time);
+  double elapsed_ms = elapsed_ns / 1000000.0;
+  printf("Time=%f milliseconds\n", elapsed_ms);
+  
   // print result to stdout according to assignment spec  
   printf("Rainfall simulation took %d time steps to complete.\n", t);
   printf("The following grid shows the number of raindrops absorbed at each point:\n");
