@@ -2,27 +2,23 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <time.h>
+#include <assert.h>
 
 #define NUM_THREADS 2
 
-struct Frac {
+typedef struct _Frac {
   int willTrickle;
   double up;
   double down;
   double left;
   double right;
-};
-
-typedef struct _double_lock {
-  double value;
-  pthread_mutex_t mutex;
-} double_lock;
+} Frac;
 
 typedef struct _thr_arg {
   double** absorb;  
   double** curr;
-  double_lock** trickle;
-  struct Frac** fraction;
+  double** trickle;
+  Frac** fraction;
   int M;
   double A;
   int N;
@@ -30,6 +26,7 @@ typedef struct _thr_arg {
   int* p_isWet;
   int* p_t;
   pthread_barrier_t* p_mybarrier;
+  pthread_mutex_t* p_locks;
 } thr_arg;
 
 double calc_time(struct timespec start, struct timespec end) {
@@ -62,22 +59,6 @@ double** doAlloc(int N) {
   return p;
 }
 
-double_lock** doAlloc_withLock(int N) {
-  int i, j;
-  // allocate N*N matrix and initialize to 0
-  double_lock** p = calloc(N, sizeof(*p));
-  for (i = 0; i < N; i++) {
-    p[i] = calloc(N, sizeof(double_lock));
-  }
-  // initilize lock at each point 
-  for (i = 0; i < N; i++) {  
-    for (j = 0; j < N; j++) {  
-      pthread_mutex_init(&(p[i][j].mutex), NULL);
-    }
-  } 
-  return p;
-}
-
 void doFree(double** p, int N) {
   int i;
   for (i = 0; i < N; i++) {
@@ -86,15 +67,7 @@ void doFree(double** p, int N) {
   free(p);
 }
 
-void doFree_withLock(double_lock** trickle, int N) {
-  int i;
-  for (i = 0; i < N; i++) {
-    free(trickle[i]);
-  }
-  free(trickle);
-}
-
-void doFree_frac(struct Frac** fraction, int N) {
+void doFree_frac(Frac** fraction, int N) {
   int i;
   for (i = 0; i < N; i++) {
     free(fraction[i]);
@@ -102,7 +75,7 @@ void doFree_frac(struct Frac** fraction, int N) {
   free(fraction);
 }
  
-void calcFraction(struct Frac** fraction, double** land, int N) {
+void calcFraction(Frac** fraction, double** land, int N) {
   int i, j;
   // traverse the land matrix to populate fraction matrix
   for(i = 0; i < N; i++) {
@@ -128,7 +101,7 @@ void calcFraction(struct Frac** fraction, double** land, int N) {
       }
       // has lower neighbor, will trickle, so proceed
 
-      struct Frac* f = &fraction[i][j];
+      Frac* f = &fraction[i][j];
       f->willTrickle = 1;
       
       // second traversal of neighbors: determine min_cnt of the 4
@@ -169,8 +142,8 @@ void* simulate(void* varg) {
   thr_arg* arg = varg;
   double** absorb = arg->absorb;
   double** curr = arg->curr;  
-  double_lock** trickle = arg->trickle;
-  struct Frac** fraction = arg->fraction;
+  double** trickle = arg->trickle;
+  Frac** fraction = arg->fraction;
   int M = arg->M;
   double A = arg->A;
   int N = arg->N;
@@ -178,7 +151,8 @@ void* simulate(void* varg) {
   int* p_isWet = arg->p_isWet;
   int* p_t = arg->p_t;
   pthread_barrier_t* p_mybarrier = arg->p_mybarrier;
-
+  pthread_mutex_t* locks = arg->p_locks;
+  
   /* compute bounds for this thread */
   int startRow = id * N / NUM_THREADS;
   int endRow = (id + 1) * (N / NUM_THREADS) - 1;
@@ -190,6 +164,16 @@ void* simulate(void* varg) {
     *p_isWet = 0;
     // first traverse
     for (i = startRow; i <= endRow; i++) {
+      // NOTE: need synchronization only when i is BORDER ROW: i == startRow || i == startRow + 1 || i == endRow || i == endRow - 1
+      if (i == startRow || i == startRow + 1 || i == endRow || i == endRow - 1) {
+      	if (i - 1 >= 0) { // acquire the lock of row i-1, if there is any
+	  pthread_mutex_lock(&locks[i-1]);
+	}
+	pthread_mutex_lock(&locks[i]); // acquire the lock of up row i
+	if (i + 1 < N) { // acquire the lock of row i+1, if there is any 
+	  pthread_mutex_lock(&locks[i+1]);
+	}
+      }
       for (j = 0; j < N; j++) {
 	// 1) receive rain drop 
 	if (M > 0) {
@@ -202,66 +186,38 @@ void* simulate(void* varg) {
           curr[i][j] -= abosorbAmt;
         }
 	// 3a) populate trickle matrix, only if there remains some water at this point and this point has some lower neighbor
-	struct Frac* f = &fraction[i][j];
+	Frac* f = &fraction[i][j];
 	if (curr[i][j] > 0 && f->willTrickle) {
 	  double trickleAmt = min(1, curr[i][j]);
-	  // NOTE: need synchronization only if that point is on boundary
-	  // self (i,j)
-	  if ((i == startRow && i != 0) || (i == endRow && i != N-1)) {
-	    pthread_mutex_lock(&(trickle[i][j].mutex));
-	    trickle[i][j].value -= trickleAmt; 
-	    pthread_mutex_unlock(&(trickle[i][j].mutex));
-	  }
-	  else {
-	    trickle[i][j].value -= trickleAmt;
-	  }
+	  curr[i][j] -= trickleAmt;
 	  // up (i-1,j)
 	  if (i-1 >= 0 && f->up != 0) {
-	    if ((i-1 == startRow-1 || i-1 == startRow) && i-1 != 0) {
-	      pthread_mutex_lock(&(trickle[i-1][j].mutex));
-	      trickle[i-1][j].value += trickleAmt * f->up;
-	      pthread_mutex_unlock(&(trickle[i-1][j].mutex)); 
-	    }
- 	    else {
-	      trickle[i-1][j].value += trickleAmt * f->up;
-	    }
-	  }
+	    trickle[i-1][j] += trickleAmt * f->up;
+	  } 	
 	  // down (i+1,j) 
 	  if (i+1 < N && f->down != 0) {
-	    if ((i+1 == endRow || i+1 == endRow+1) && i+1 != N-1) {
-	      pthread_mutex_lock(&(trickle[i+1][j].mutex));
-	      trickle[i+1][j].value += trickleAmt * f->down;
-	      pthread_mutex_unlock(&(trickle[i+1][j].mutex));
-	    }
-	    else {
-	      trickle[i+1][j].value += trickleAmt * f->down;
-	    }
+	    trickle[i+1][j] += trickleAmt * f->down;
 	  }
 	  // left (i,j-1)       
 	  if (j-1 >= 0 && f->left != 0) {
-	    if ((i == startRow && i != 0) || (i == endRow && i != N-1)) {
-	      pthread_mutex_lock(&(trickle[i][j-1].mutex));
-	      trickle[i][j-1].value += trickleAmt * f->left;
-	      pthread_mutex_unlock(&(trickle[i][j-1].mutex)); 	    
-	    }
-	    else {
-	      trickle[i][j-1].value += trickleAmt * f->left;
-	    }
+	    trickle[i][j-1] += trickleAmt * f->left;
 	  }
 	  //right (i,j+1)  
 	  if (j+1 < N && f->right != 0) { 
-	    if ((i == startRow && i != 0) || (i == endRow && i != N-1)) {
-	      pthread_mutex_lock(&(trickle[i][j+1].mutex));
-	      trickle[i][j+1].value += trickleAmt * f->right;
-	      pthread_mutex_unlock(&(trickle[i][j+1].mutex)); 	      
-	    }
-	    else {
-	      trickle[i][j+1].value += trickleAmt * f->right;
-	    }
+	    trickle[i][j+1] += trickleAmt * f->right;
 	  }
 	} // end 3a)
+      } // end j loop
+      if (i == startRow || i == startRow + 1 || i == endRow || i == endRow - 1) {
+	if (i - 1 >= 0) {
+          pthread_mutex_unlock(&locks[i-1]);
+        }
+	pthread_mutex_unlock(&locks[i]);
+	if (i + 1 < N) {
+          pthread_mutex_unlock(&locks[i+1]);
+        }
       }
-    }
+    } // end i loop
     
     // barrier to make sure every thread has finished first traverse (at current iteration), ready to do the second traverse
     pthread_barrier_wait(p_mybarrier);
@@ -269,8 +225,8 @@ void* simulate(void* varg) {
     // 3b) second traverse
     for (i = startRow; i <= endRow; i++) {
       for (j = 0; j < N; j++) {
-	curr[i][j] += trickle[i][j].value;
-	trickle[i][j].value = 0; // reinitialize trickle matrix to 0
+	curr[i][j] += trickle[i][j];
+	trickle[i][j] = 0; // reinitialize trickle matrix to 0
 	if (curr[i][j] > 0) {
 	  *p_isWet = 1;
 	}
@@ -302,6 +258,9 @@ int main(int argc, char** argv){
   int M = atoi(argv[1]); // # of simulation time steps
   double A = atof(argv[2]); // absorption rate
   int N = atoi(argv[3]); // dimension of the landscape
+  
+  assert(NUM_THREADS <= N);
+
   int i, j;
   struct timespec start_time, end_time;
   int isWet = 0; // flag to denote if there still remains any water at certain points
@@ -317,7 +276,7 @@ int main(int argc, char** argv){
   // absorb matrix to record the amount of water draining to land
   double** absorb = doAlloc(N);
   // temporary matrix for the current time step, to record trickle in the first traverse, then used in the second traverse to update curr matrix
-  double_lock** trickle = doAlloc_withLock(N);
+  double** trickle = doAlloc(N);
     
   // open file
   FILE * f = fopen(argv[4], "r");
@@ -342,15 +301,20 @@ int main(int argc, char** argv){
   }
   
   // fraction matrix to determine: for each point, if it will trickle water to its neighbors, and if so, what is the fraction for each of its neighbor(up, down, left, right), e.g: 0, 1, 1/2, 1/3, 1/4
-  struct Frac** fraction = calloc(N, sizeof(*fraction));
+  Frac** fraction = calloc(N, sizeof(*fraction));
   for (i = 0; i < N; i++) {
-    fraction[i] = calloc(N, sizeof(struct Frac));
+    fraction[i] = calloc(N, sizeof(Frac));
   }
 
   // populate the fraction matrix
   calcFraction(fraction, land, N);
   
-  /***** let threads do the simulation *****/
+  // allocate and ini locks
+  pthread_mutex_t* locks = malloc(N * sizeof(*locks));
+  for (i = 0; i < N; i++) {
+    pthread_mutex_init(&locks[i], NULL);
+  }
+  /********************************************* let threads do the simulation *********************************************/
   clock_gettime(CLOCK_MONOTONIC, &start_time);
   
   /* Allocate thread objects */
@@ -370,6 +334,7 @@ int main(int argc, char** argv){
     p->p_isWet = &isWet;
     p->p_t = &t; 
     p->p_mybarrier = &mybarrier;
+    p->p_locks = locks;
     pthread_create(&threads[i], NULL, simulate, (void *)(p));  
   }
   /* Join the threads to complete simulation */
@@ -378,8 +343,8 @@ int main(int argc, char** argv){
   }
  
   //t = simulate(absorb, fraction, M, A, N);
-  clock_gettime(CLOCK_MONOTONIC, &end_time);
-  /************ end simulation ************/
+clock_gettime(CLOCK_MONOTONIC, &end_time);
+  /**************************************************** end simulation ****************************************************/
   
   double elapsed_ns = calc_time(start_time, end_time);
   double elapsed_ms = elapsed_ns / 1000000.0;
@@ -394,19 +359,21 @@ int main(int argc, char** argv){
     }
     printf("\n");
   }
-  
+
   // Destroy locks...
   
   // Destroy barrier...
-
+  
   // free thread objects
   free(threads);
+  // free locks
+  free(locks);
   // free the allocated space for serveral matrixes
   doFree(curr, N);
   doFree(land, N);
   doFree(absorb, N);
+  doFree(trickle, N); 
   doFree_frac(fraction, N);   
-  doFree_withLock(trickle, N);
   
   return EXIT_SUCCESS;
 }
