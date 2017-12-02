@@ -4,7 +4,7 @@
 #include <time.h>
 #include <assert.h>
 
-#define NUM_THREADS 2
+#define NUM_THREADS 16
 
 typedef struct _Frac {
   int willTrickle;
