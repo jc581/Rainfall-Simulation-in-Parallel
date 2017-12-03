@@ -4,8 +4,6 @@
 #include <time.h>
 #include <assert.h>
 
-#define NUM_THREADS 16
-
 typedef struct _Frac {
   int willTrickle;
   double up;
@@ -27,6 +25,7 @@ typedef struct _thr_arg {
   int* p_t;
   pthread_barrier_t* p_mybarrier;
   pthread_mutex_t* p_locks;
+  int NUM_THREADS;
 } thr_arg;
 
 double calc_time(struct timespec start, struct timespec end) {
@@ -137,6 +136,8 @@ void calcFraction(Frac** fraction, double** land, int N) {
   }
 }
 
+//int isBorderRow(int row, int start, int end) {}
+
 void* simulate(void* varg) {
   /* recv args */
   thr_arg* arg = varg;
@@ -152,7 +153,8 @@ void* simulate(void* varg) {
   int* p_t = arg->p_t;
   pthread_barrier_t* p_mybarrier = arg->p_mybarrier;
   pthread_mutex_t* locks = arg->p_locks;
-  
+  int NUM_THREADS = arg->NUM_THREADS;
+
   /* compute bounds for this thread */
   int startRow = id * N / NUM_THREADS;
   int endRow = (id + 1) * (N / NUM_THREADS) - 1;
@@ -164,16 +166,17 @@ void* simulate(void* varg) {
     *p_isWet = 0;
     // first traverse
     for (i = startRow; i <= endRow; i++) {
-      // NOTE: need synchronization only when i is BORDER ROW: i == startRow || i == startRow + 1 || i == endRow || i == endRow - 1
-      if (i == startRow || i == startRow + 1 || i == endRow || i == endRow - 1) {
-      	if (i - 1 >= 0) { // acquire the lock of row i-1, if there is any
-	  pthread_mutex_lock(&locks[i-1]);
-	}
-	pthread_mutex_lock(&locks[i]); // acquire the lock of up row i
-	if (i + 1 < N) { // acquire the lock of row i+1, if there is any 
-	  pthread_mutex_lock(&locks[i+1]);
-	}
+      /*** NOTE: need synchronization only when i affects BORDER ROW: startRow, startRow-1, endRow, endRow+1 ***/
+      if (i - 1 >= 0 && (i - 1 == startRow || i - 1 == startRow - 1)) { // acquire the lock of row i-1, if there is any
+	pthread_mutex_lock(&locks[i-1]);
       }
+      if (i == startRow || i == endRow) {
+	pthread_mutex_lock(&locks[i]); // acquire the lock of row i
+      }
+      if (i + 1 < N && (i + 1 == endRow || i + 1 == endRow + 1)) { // acquire the lock of row i+1, if there is any 
+	pthread_mutex_lock(&locks[i+1]);
+      }
+
       for (j = 0; j < N; j++) {
 	// 1) receive rain drop 
 	if (M > 0) {
@@ -208,14 +211,15 @@ void* simulate(void* varg) {
 	  }
 	} // end 3a)
       } // end j loop
-      if (i == startRow || i == startRow + 1 || i == endRow || i == endRow - 1) {
-	if (i - 1 >= 0) {
-          pthread_mutex_unlock(&locks[i-1]);
-        }
-	pthread_mutex_unlock(&locks[i]);
-	if (i + 1 < N) {
-          pthread_mutex_unlock(&locks[i+1]);
-        }
+      /*** maybe need to release locks ***/
+      if (i - 1 >= 0 && (i - 1 == startRow || i - 1 == startRow - 1)) {
+	pthread_mutex_unlock(&locks[i-1]);
+      }
+      if (i == startRow || i == endRow) {
+	pthread_mutex_unlock(&locks[i]); 
+      }
+      if (i + 1 < N && (i + 1 == endRow || i + 1 == endRow + 1)) {
+	pthread_mutex_unlock(&locks[i+1]);
       }
     } // end i loop
     
@@ -250,15 +254,16 @@ void* simulate(void* varg) {
 
 int main(int argc, char** argv){
   // validate input
-  if (argc != 5) {
-    printf("Usage:\n./rainfall <M> <A> <N> <elevation_file>\n");
+  if (argc != 6) {
+    printf("Usage:\n./rainfall <M> <A> <N> <elevation_file> <NUM_THREADS>\n");
     return EXIT_FAILURE;
   }
   
   int M = atoi(argv[1]); // # of simulation time steps
   double A = atof(argv[2]); // absorption rate
   int N = atoi(argv[3]); // dimension of the landscape
-  
+  int NUM_THREADS = atoi(argv[5]);
+
   assert(NUM_THREADS <= N);
 
   int i, j;
@@ -266,9 +271,7 @@ int main(int argc, char** argv){
   int isWet = 0; // flag to denote if there still remains any water at certain points
   int t = 0; // timesteps needed to finish simulating 
   pthread_t* threads;
-  pthread_barrier_t mybarrier;
-  pthread_barrier_init(&mybarrier, NULL, NUM_THREADS);
-
+  
   // matrix to represent the landscape
   double** land = doAlloc(N);
   // matrix to record current amount of rain at each point
@@ -309,14 +312,19 @@ int main(int argc, char** argv){
   // populate the fraction matrix
   calcFraction(fraction, land, N);
   
+  /********************************************* let threads do the simulation *********************************************/
+  clock_gettime(CLOCK_MONOTONIC, &start_time);
+
   // allocate and ini locks
   pthread_mutex_t* locks = malloc(N * sizeof(*locks));
   for (i = 0; i < N; i++) {
     pthread_mutex_init(&locks[i], NULL);
   }
-  /********************************************* let threads do the simulation *********************************************/
-  clock_gettime(CLOCK_MONOTONIC, &start_time);
   
+  // allocate and ini barrier
+  pthread_barrier_t mybarrier;
+  pthread_barrier_init(&mybarrier, NULL, NUM_THREADS);
+
   /* Allocate thread objects */
   threads = (pthread_t *) malloc(NUM_THREADS * sizeof(pthread_t));
   /* Create threads and assign the work */
@@ -335,6 +343,7 @@ int main(int argc, char** argv){
     p->p_t = &t; 
     p->p_mybarrier = &mybarrier;
     p->p_locks = locks;
+    p->NUM_THREADS = NUM_THREADS;
     pthread_create(&threads[i], NULL, simulate, (void *)(p));  
   }
   /* Join the threads to complete simulation */
@@ -342,8 +351,19 @@ int main(int argc, char** argv){
     pthread_join(threads[i], NULL);  
   }
  
+  // Destroy locks...
+  for (i = 0; i < N; i++) {
+    pthread_mutex_destroy(&locks[i]);
+  }
+  // Destroy barrier...
+  pthread_barrier_destroy(&mybarrier);
+  // free thread objects
+  free(threads);
+  // free locks
+  free(locks);
+
   //t = simulate(absorb, fraction, M, A, N);
-clock_gettime(CLOCK_MONOTONIC, &end_time);
+  clock_gettime(CLOCK_MONOTONIC, &end_time);
   /**************************************************** end simulation ****************************************************/
   
   double elapsed_ns = calc_time(start_time, end_time);
@@ -360,14 +380,6 @@ clock_gettime(CLOCK_MONOTONIC, &end_time);
     printf("\n");
   }
 
-  // Destroy locks...
-  
-  // Destroy barrier...
-  
-  // free thread objects
-  free(threads);
-  // free locks
-  free(locks);
   // free the allocated space for serveral matrixes
   doFree(curr, N);
   doFree(land, N);

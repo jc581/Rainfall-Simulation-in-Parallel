@@ -10,4 +10,4 @@ mt_rainfall:
 	$(CC) $(MTFLAGS) -o mt_rainfall mt_rainfall.c $(LIB)
 
 clean:
-	rm *~ *# rainfall mt_rainfall
+	rm *~ *# rainfall mt_rainfall myOut*

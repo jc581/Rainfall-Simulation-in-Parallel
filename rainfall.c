@@ -56,18 +56,14 @@ void doFree_frac(struct Frac** fraction, int N) {
   free(fraction);
 }
 
-int simulate(double** land, double** absorb, struct Frac** fraction, int M, double A, int N) {
+int simulate(double** land, double** absorb, struct Frac** fraction, double** curr, double** trickle, int M, double A, int N) {
   int i, j;
   int t = 0;
   // flag to denote if there still remains some water at certain points
   int isWet = 0;
-  // matrix to record current amount of rain at each point
-  double** curr = doAlloc(N);
   
   while (isWet || M > 0) { // each iteration is one time step
     isWet = 0;
-    // temporary matrix for the current time step, to record trickle in the first traverse, then used in the second traverse to update curr matrix
-    double** trickle = doAlloc(N);
 
     // first traverse
     for (i = 0; i < N; i++) {
@@ -85,19 +81,19 @@ int simulate(double** land, double** absorb, struct Frac** fraction, int M, doub
 	// 3a) populate the temporary trickle matrix, do nothing if there remains no water at this point or this point has no lower neighbors
 	struct Frac* f = &fraction[i][j];
 
-	if (curr[i][j] > 0 && f->willTrickle == 1) {
+	if (curr[i][j] > 0 && f->willTrickle) {
 	  double trickleAmt = min(1, curr[i][j]);
-	  trickle[i][j] -= trickleAmt;
-	  if (i-1 >= 0) { // up (i-1,j)
+	  curr[i][j] -= trickleAmt;
+	  if (i-1 >= 0 && f->up != 0) { // up (i-1,j)
 	    trickle[i-1][j] += trickleAmt * f->up;
 	  }
-	  if (i+1 < N) { // down (i+1,j)
+	  if (i+1 < N && f->down != 0) { // down (i+1,j)
 	    trickle[i+1][j] += trickleAmt * f->down;
 	  }
-	  if (j-1 >= 0) { // left (i,j-1)
+	  if (j-1 >= 0 && f->left != 0) { // left (i,j-1)
 	    trickle[i][j-1] += trickleAmt * f->left;
 	  }
-	  if (j+1 < N) { //right (i,j+1)
+	  if (j+1 < N && f->right != 0) { //right (i,j+1)
 	    trickle[i][j+1] += trickleAmt * f->right;
 	  }
 	}
@@ -108,20 +104,19 @@ int simulate(double** land, double** absorb, struct Frac** fraction, int M, doub
     for (i = 0; i < N; i++) {
       for (j = 0; j < N; j++) {
 	curr[i][j] += trickle[i][j];
+	trickle[i][j] = 0; // reinitialize trickle matrix to 0
 	if (curr[i][j] > 0) {
 	  isWet = 1;
 	}
       }
     }
     
-    doFree(trickle, N);
     t++;
     if (M > 0) {
       M--;
     }
   }
   
-  doFree(curr, N);
   return t;
 }
   
@@ -202,9 +197,13 @@ int main(int argc, char** argv){
 
   // matrix to represent the landscape
   double** land = doAlloc(N);
+  // matrix to record current amount of rain at each point
+  double** curr = doAlloc(N);  
   // absorb matrix to record the amount of water draining to land
   double** absorb = doAlloc(N);
- 
+  // temporary matrix for the current time step, to record trickle in the first traverse, then used in the second traverse to update curr matrix
+  double** trickle = doAlloc(N);
+  
   struct timespec start_time, end_time;
 
   // open file
@@ -240,7 +239,7 @@ int main(int argc, char** argv){
 
   clock_gettime(CLOCK_MONOTONIC, &start_time);
   // do the simulation
-  t = simulate(land, absorb, fraction, M, A, N);
+  t = simulate(land, absorb, fraction, curr, trickle, M, A, N);
   clock_gettime(CLOCK_MONOTONIC, &end_time);
 
   double elapsed_ns = calc_time(start_time, end_time);
@@ -256,10 +255,12 @@ int main(int argc, char** argv){
     }
     printf("\n");
   }
-
+  
   // free the allocated space for serveral matrixes
+  doFree(curr, N);  
   doFree(land, N);
   doFree(absorb, N);
+  doFree(trickle, N); 
   doFree_frac(fraction, N);   
   
   return EXIT_SUCCESS;
